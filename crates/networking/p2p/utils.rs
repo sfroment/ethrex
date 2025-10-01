@@ -1,12 +1,12 @@
 use std::{
-    path::{Path, PathBuf},
+    net::IpAddr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use ethrex_common::utils::keccak;
 use ethrex_common::{H256, H512};
 use ethrex_rlp::error::RLPDecodeError;
 use ethrex_trie::Node;
+use keccak_hash::keccak;
 use secp256k1::{PublicKey, SecretKey};
 use spawned_concurrency::error::GenServerError;
 
@@ -48,35 +48,38 @@ pub fn public_key_from_signing_key(signer: &SecretKey) -> H512 {
     H512::from_slice(&encoded[1..])
 }
 
-pub fn get_account_storages_snapshots_dir(datadir: &Path) -> PathBuf {
-    datadir.join("account_storages_snapshots")
+pub fn unmap_ipv4in6_address(addr: IpAddr) -> IpAddr {
+    if let IpAddr::V6(v6_addr) = addr {
+        if let Some(v4_addr) = v6_addr.to_ipv4_mapped() {
+            return IpAddr::V4(v4_addr);
+        }
+    }
+    addr
 }
 
-pub fn get_account_state_snapshots_dir(datadir: &Path) -> PathBuf {
-    datadir.join("account_state_snapshots")
+pub fn get_account_storages_snapshots_dir(datadir: &String) -> String {
+    format!("{datadir}/account_storages_snapshots")
 }
 
-pub fn get_account_state_snapshot_file(directory: &Path, chunk_index: u64) -> PathBuf {
-    directory.join(format!("account_state_chunk.rlp.{chunk_index}"))
+pub fn get_account_state_snapshots_dir(datadir: &String) -> String {
+    format!("{datadir}/account_state_snapshots")
 }
 
-pub fn get_account_storages_snapshot_file(directory: &Path, chunk_index: u64) -> PathBuf {
-    directory.join(format!("account_storages_chunk.rlp.{chunk_index}"))
+pub fn get_account_state_snapshot_file(directory: String, chunk_index: u64) -> String {
+    format!("{directory}/account_state_chunk.rlp.{chunk_index}")
 }
 
-pub fn get_code_hashes_snapshots_dir(datadir: &Path) -> PathBuf {
-    datadir.join("bytecode_hashes_snapshots")
+pub fn get_account_storages_snapshot_file(directory: String, chunk_index: u64) -> String {
+    format!("{directory}/account_storages_chunk.rlp.{chunk_index}")
 }
 
-pub fn get_code_hashes_snapshot_file(directory: &Path, chunk_index: u64) -> PathBuf {
-    directory.join(format!("bytecode_hashes_chunk.rlp.{chunk_index}"))
-}
-
-pub fn dump_to_file(path: &Path, contents: Vec<u8>) -> Result<(), DumpError> {
-    std::fs::write(path, &contents)
-        .inspect_err(|err| tracing::error!(%err, ?path, "Failed to dump snapshot to file"))
+pub fn dump_to_file(path: String, contents: Vec<u8>) -> Result<(), DumpError> {
+    std::fs::write(&path, &contents)
+        .inspect_err(|err| {
+            tracing::error!("Failed to write snapshot to path {}. Error: {}", &path, err)
+        })
         .map_err(|err| DumpError {
-            path: path.to_path_buf(),
+            path,
             contents,
             error: err.kind(),
         })
@@ -88,10 +91,7 @@ pub async fn send_message_and_wait_for_response(
     message: Message,
     request_id: u64,
 ) -> Result<Vec<Node>, SendMessageError> {
-    let receiver = peer_channel
-        .receiver
-        .try_lock()
-        .map_err(|_| SendMessageError::PeerBusy)?;
+    let receiver = peer_channel.receiver.lock().await;
     peer_channel
         .connection
         .cast(CastMessage::BackendMessage(message))
@@ -143,10 +143,10 @@ async fn receive_trienodes(
 ) -> Option<TrieNodes> {
     loop {
         let resp = receiver.recv().await?;
-        if let Message::TrieNodes(trie_nodes) = resp {
-            if trie_nodes.id == request_id {
-                return Some(trie_nodes);
-            }
+        if let Message::TrieNodes(trie_nodes) = resp
+            && trie_nodes.id == request_id
+        {
+            return Some(trie_nodes);
         }
     }
 }

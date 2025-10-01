@@ -5,16 +5,16 @@ use super::{
 use crate::rlpx::utils::{compress_pubkey, snappy_decompress};
 use bytes::BufMut;
 use ethrex_common::H512;
-use ethrex_rlp::structs::{Decoder, Encoder};
 use ethrex_rlp::{
     decode::{RLPDecode, decode_rlp_item},
     encode::RLPEncode,
     error::{RLPDecodeError, RLPEncodeError},
+    structs::{Decoder, Encoder},
 };
 use secp256k1::PublicKey;
 use serde::Serialize;
 
-pub const SUPPORTED_ETH_CAPABILITIES: [Capability; 2] = [Capability::eth(68), Capability::eth(69)];
+pub const SUPPORTED_ETH_CAPABILITIES: [Capability; 1] = [Capability::eth(68)];
 pub const SUPPORTED_SNAP_CAPABILITIES: [Capability; 1] = [Capability::snap(1)];
 
 /// The version of the base P2P protocol we support.

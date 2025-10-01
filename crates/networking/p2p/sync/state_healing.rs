@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ethrex_common::{H256, constants::EMPTY_KECCACK_HASH, types::AccountState};
+use ethrex_common::{H256, types::AccountState};
 use ethrex_rlp::{decode::RLPDecode, encode::RLPEncode};
 use ethrex_storage::Store;
 use ethrex_trie::{EMPTY_TRIE_HASH, Nibbles, Node, NodeHash, TrieDB, TrieError};
@@ -25,7 +25,7 @@ use crate::{
     metrics::METRICS,
     peer_handler::{PeerHandler, RequestMetadata, RequestStateTrieNodesError},
     rlpx::p2p::SUPPORTED_SNAP_CAPABILITIES,
-    sync::{AccountStorageRoots, code_collector::CodeHashCollector},
+    sync::AccountStorageRoots,
     utils::current_unix_time,
 };
 
@@ -52,7 +52,6 @@ pub async fn heal_state_trie_wrap(
     staleness_timestamp: u64,
     global_leafs_healed: &mut u64,
     storage_accounts: &mut AccountStorageRoots,
-    code_hash_collector: &mut CodeHashCollector,
 ) -> Result<bool, SyncError> {
     let mut healing_done = false;
     *METRICS.current_step.lock().await = "Healing State".to_string();
@@ -66,7 +65,6 @@ pub async fn heal_state_trie_wrap(
             global_leafs_healed,
             HashMap::new(),
             storage_accounts,
-            code_hash_collector,
         )
         .await?;
         if current_unix_time() > staleness_timestamp {
@@ -82,7 +80,6 @@ pub async fn heal_state_trie_wrap(
 /// Returns true if healing was fully completed or false if we need to resume healing on the next sync cycle
 /// This method also stores modified storage roots in the db for heal_storage_trie
 /// Note: downloaders only gets updated when heal_state_trie, once per snap cycle
-#[allow(clippy::too_many_arguments)]
 async fn heal_state_trie(
     state_root: H256,
     store: Store,
@@ -91,7 +88,6 @@ async fn heal_state_trie(
     global_leafs_healed: &mut u64,
     mut membatch: HashMap<Nibbles, MembatchEntryValue>,
     storage_accounts: &mut AccountStorageRoots,
-    code_hash_collector: &mut CodeHashCollector,
 ) -> Result<bool, SyncError> {
     // Add the current state trie root to the pending paths
     let mut paths: Vec<RequestMetadata> = vec![RequestMetadata {
@@ -131,7 +127,7 @@ async fn heal_state_trie(
 
             METRICS
                 .global_state_trie_leafs_healed
-                .store(*global_leafs_healed, Ordering::Relaxed);
+                .fetch_add(*global_leafs_healed, Ordering::Relaxed);
             METRICS
                 .healing_empty_try_recv
                 .store(empty_try_recv, Ordering::Relaxed);
@@ -152,6 +148,13 @@ async fn heal_state_trie(
             }
             downloads_success = 0;
             downloads_fail = 0;
+
+            peers
+                .peer_scores
+                .lock()
+                .await
+                .update_peers(&peers.peer_table)
+                .await;
         }
 
         // Attempt to receive a response from one of the peers
@@ -163,24 +166,19 @@ async fn heal_state_trie(
         if let Ok((peer_id, response, batch)) = res {
             inflight_tasks -= 1;
             // Mark the peer as available
-            peers.peer_table.free_peer(peer_id).await;
+            peers.peer_scores.lock().await.free_peer(peer_id);
             match response {
                 // If the peers responded with nodes, add them to the nodes_to_heal vector
                 Ok(nodes) => {
                     for (node, meta) in nodes.iter().zip(batch.iter()) {
                         if let Node::Leaf(node) = node {
-                            let account = AccountState::decode(&node.value)?;
+                            let account = AccountState::decode(&node.value).expect("decode failed");
                             let account_hash = H256::from_slice(
                                 &meta.path.concat(node.partial.clone()).to_bytes(),
                             );
-
-                            // // Collect valid code hash
-                            if account.code_hash != *EMPTY_KECCACK_HASH {
-                                code_hash_collector.add(account.code_hash);
-                                code_hash_collector.flush_if_needed().await?;
+                            if account.storage_root != *EMPTY_TRIE_HASH {
+                                storage_accounts.healed_accounts.insert(account_hash);
                             }
-
-                            storage_accounts.healed_accounts.insert(account_hash);
                             storage_accounts
                                 .accounts_with_storage_root
                                 .remove(&account_hash);
@@ -196,7 +194,7 @@ async fn heal_state_trie(
                         .count() as u64;
                     nodes_to_heal.push((nodes, batch));
                     downloads_success += 1;
-                    peers.peer_table.record_success(peer_id).await;
+                    peers.peer_scores.lock().await.record_success(peer_id);
                 }
                 // If the peers failed to respond, reschedule the task by adding the batch to the paths vector
                 Err(_) => {
@@ -205,7 +203,7 @@ async fn heal_state_trie(
                     // Or with a VecDequeue
                     paths.extend(batch);
                     downloads_fail += 1;
-                    peers.peer_table.record_failure(peer_id).await;
+                    peers.peer_scores.lock().await.record_failure(peer_id);
                 }
             }
         }
@@ -223,8 +221,11 @@ async fn heal_state_trie(
                     longest_path_seen,
                 );
                 let Some((peer_id, mut peer_channel)) = peers
-                    .peer_table
+                    .peer_scores
+                    .lock()
+                    .await
                     .get_peer_channel_with_highest_score_and_mark_as_used(
+                        &peers.peer_table,
                         &SUPPORTED_SNAP_CAPABILITIES,
                     )
                     .await

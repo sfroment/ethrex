@@ -1,21 +1,22 @@
-use crate::rlpx::connection::server::{broadcast_message, send};
-use crate::rlpx::l2::messages::{BatchSealed, L2Message, NewBlock};
-use crate::rlpx::utils::log_peer_error;
-use crate::rlpx::{connection::server::Established, error::RLPxError, message::Message};
-use ethereum_types::Address;
-use ethereum_types::Signature;
-use ethrex_blockchain::error::ChainError;
-use ethrex_blockchain::fork_choice::apply_fork_choice;
+use crate::rlpx::{
+    connection::server::{Established, broadcast_message, send},
+    error::RLPxError,
+    l2::messages::{BatchSealed, L2Message, NewBlock},
+    message::Message,
+    utils::log_peer_error,
+};
+use ethereum_types::{Address, Signature};
+use ethrex_blockchain::{error::ChainError, fork_choice::apply_fork_choice};
 use ethrex_common::types::{Block, recover_address};
 use ethrex_storage_rollup::StoreRollup;
 use secp256k1::{Message as SecpMessage, SecretKey};
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
-use super::messages::batch_hash;
-use super::{PERIODIC_BATCH_BROADCAST_INTERVAL, PERIODIC_BLOCK_BROADCAST_INTERVAL};
+use super::{
+    PERIODIC_BATCH_BROADCAST_INTERVAL, PERIODIC_BLOCK_BROADCAST_INTERVAL, messages::batch_hash,
+};
 
 #[derive(Debug, Clone)]
 pub struct L2ConnectedState {
@@ -219,12 +220,11 @@ pub(crate) async fn send_new_block(established: &mut Established) -> Result<(), 
                             &l2_state.committer_key,
                         )
                         .serialize_compact();
-                    let recovery_id: u8 =
-                        Into::<i32>::into(recovery_id).try_into().map_err(|e| {
-                            RLPxError::InternalError(format!(
-                                "Failed to convert recovery id to u8: {e}. This is a bug."
-                            ))
-                        })?;
+                    let recovery_id: u8 = recovery_id.to_i32().try_into().map_err(|e| {
+                        RLPxError::InternalError(format!(
+                            "Failed to convert recovery id to u8: {e}. This is a bug."
+                        ))
+                    })?;
                     let mut sig = [0u8; 65];
                     sig[..64].copy_from_slice(&signature);
                     sig[64] = recovery_id;
@@ -275,18 +275,13 @@ async fn should_process_new_block(
 
     let block_hash = msg.block.hash();
 
-    let msg_signature = msg.signature;
-    let recovered_lead_sequencer =
-        tokio::task::spawn_blocking(move || recover_address(msg_signature, block_hash))
-            .await
-            .map_err(|_| RLPxError::InternalError("Recover Address task failed".to_string()))?
-            .map_err(|e| {
-                log_peer_error(
-                    &established.node,
-                    &format!("Failed to recover lead sequencer: {e}"),
-                );
-                RLPxError::CryptographyError(e.to_string())
-            })?;
+    let recovered_lead_sequencer = recover_address(msg.signature, block_hash).map_err(|e| {
+        log_peer_error(
+            &established.node,
+            &format!("Failed to recover lead sequencer: {e}"),
+        );
+        RLPxError::CryptographyError(e.to_string())
+    })?;
 
     if !validate_signature(recovered_lead_sequencer) {
         return Ok(false);

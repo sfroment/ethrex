@@ -1,6 +1,5 @@
 use bytes::{BufMut, Bytes};
-use ethrex_common::types::ForkId;
-use ethrex_common::{H256, H264, H512};
+use ethrex_common::{H256, H264, H512, types::ForkId};
 use ethrex_rlp::{
     decode::RLPDecode,
     encode::RLPEncode,
@@ -10,30 +9,14 @@ use ethrex_rlp::{
 use secp256k1::{PublicKey, SecretKey};
 use serde::{Deserialize, Serialize, ser::Serializer};
 use sha3::{Digest, Keccak256};
-use std::net::Ipv6Addr;
 use std::{
     fmt::Display,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     str::FromStr,
     sync::OnceLock,
 };
-use thiserror::Error;
 
 use crate::utils::node_id;
-
-#[derive(Debug, Error)]
-pub enum NodeError {
-    #[error("Invalid format: {0}")]
-    InvalidFormat(String),
-    #[error("Parse error: {0}")]
-    ParseError(String),
-    #[error("RLP decode error: {0}")]
-    RLPDecodeError(#[from] RLPDecodeError),
-    #[error("Missing field: {0}")]
-    MissingField(String),
-    #[error("Signature error: {0}")]
-    SignatureError(String),
-}
 
 const MAX_NODE_RECORD_ENCODED_SIZE: usize = 300;
 
@@ -105,8 +88,7 @@ impl<'de> serde::de::Deserialize<'de> for Node {
     where
         D: serde::Deserializer<'de>,
     {
-        Node::from_str(&<String>::deserialize(deserializer)?)
-            .map_err(|e| serde::de::Error::custom(format!("{}", e)))
+        Node::from_str(&<String>::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 
@@ -120,15 +102,13 @@ impl serde::Serialize for Node {
 }
 
 impl FromStr for Node {
-    type Err = NodeError;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             s if s.starts_with("enode://") => Self::from_enode_url(s),
             s if s.starts_with("enr:") => Self::from_enr_url(s),
-            _ => Err(NodeError::InvalidFormat(
-                "Invalid network address format".into(),
-            )),
+            _ => Err("Invalid network address format".into()),
         }
     }
 }
@@ -145,9 +125,9 @@ impl Node {
         }
     }
 
-    pub fn from_enode_url(enode: &str) -> Result<Self, NodeError> {
-        let public_key = H512::from_str(&enode[8..136])
-            .map_err(|_| NodeError::ParseError("Could not parse public_key".into()))?;
+    pub fn from_enode_url(enode: &str) -> Result<Self, String> {
+        let public_key =
+            H512::from_str(&enode[8..136]).map_err(|_| "Could not parse public_key")?;
 
         let address_start = 137;
         let address_part = &enode[address_start..];
@@ -160,39 +140,33 @@ impl Node {
 
         let socket_address: SocketAddr = address_part
             .parse()
-            .map_err(|_| NodeError::ParseError("Could not parse socket address".into()))?;
+            .map_err(|_| "Could not parse socket address")?;
         let ip = socket_address.ip();
         let port = socket_address.port();
 
         let udp_port = match enode.find("?discport=") {
             Some(pos) => enode[pos + 10..]
                 .parse()
-                .map_err(|_| NodeError::ParseError("Could not parse discport".into()))?,
+                .map_err(|_| "Could not parse discport")?,
             None => port,
         };
 
         Ok(Self::new(ip, udp_port, port, public_key))
     }
 
-    pub fn from_enr_url(enr: &str) -> Result<Self, NodeError> {
+    pub fn from_enr_url(enr: &str) -> Result<Self, String> {
         let base64_decoded = ethrex_common::base64::decode(&enr.as_bytes()[4..]);
-        let record = NodeRecord::decode(&base64_decoded).map_err(NodeError::from)?;
+        let record = NodeRecord::decode(&base64_decoded)
+            .map_err(|_| "Could not build node record from enr")?;
         let pairs = record.decode_pairs();
-        let public_key = pairs.secp256k1.ok_or(NodeError::MissingField(
-            "public key not found in record".into(),
-        ))?;
-        let verifying_key = PublicKey::from_slice(public_key.as_bytes()).map_err(|_| {
-            NodeError::ParseError("public key could not be built from msg pub key bytes".into())
-        })?;
+        let public_key = pairs.secp256k1.ok_or("public key not found in record")?;
+        let verifying_key = PublicKey::from_slice(public_key.as_bytes())
+            .map_err(|_| "public key could no be built from msg pub key bytes")?;
         let encoded = verifying_key.serialize_uncompressed();
         let public_key = H512::from_slice(&encoded[1..]);
 
         let ip: IpAddr = match (pairs.ip, pairs.ip6) {
-            (None, None) => {
-                return Err(NodeError::MissingField(
-                    "Ip not found in record, can't construct node".into(),
-                ));
-            }
+            (None, None) => return Err("Ip not found in record, can't construct node".to_string()),
             (None, Some(ipv6)) => IpAddr::from(ipv6),
             (Some(ipv4), None) => IpAddr::from(ipv4),
             (Some(ipv4), Some(_ipv6)) => IpAddr::from(ipv4),
@@ -203,11 +177,11 @@ impl Node {
         let udp_port = pairs
             .udp_port
             .or(pairs.tcp_port)
-            .ok_or(NodeError::MissingField("No port found in record".into()))?;
+            .ok_or("No port found in record")?;
         let tcp_port = pairs
             .tcp_port
             .or(pairs.udp_port)
-            .ok_or(NodeError::MissingField("No port found in record".into()))?;
+            .ok_or("No port found in record")?;
 
         Ok(Self::new(ip, udp_port, tcp_port, public_key))
     }
@@ -225,9 +199,7 @@ impl Node {
     }
 
     pub fn udp_addr(&self) -> SocketAddr {
-        // Nodes that use ipv6 currently are only ipv4 masked addresses, so we can convert it to an ipv4 address.
-        // If in the future we have real ipv6 nodes, we will need to handle them differently.
-        SocketAddr::new(self.ip.to_canonical(), self.udp_port)
+        SocketAddr::new(self.ip, self.udp_port)
     }
 
     pub fn tcp_addr(&self) -> SocketAddr {
@@ -321,17 +293,17 @@ impl NodeRecord {
         decoded_pairs
     }
 
-    pub fn enr_url(&self) -> Result<String, NodeError> {
+    pub fn enr_url(&self) -> Result<String, String> {
         let rlp_encoded = self.encode_to_vec();
         let base64_encoded = ethrex_common::base64::encode(&rlp_encoded);
         let mut result: String = "enr:".into();
-        let base64_encoded = String::from_utf8(base64_encoded)
-            .map_err(|_| NodeError::ParseError("Could not base 64 encode enr record".into()))?;
+        let base64_encoded =
+            String::from_utf8(base64_encoded).map_err(|_| "Could not base 64 encode enr record")?;
         result.push_str(&base64_encoded);
         Ok(result)
     }
 
-    pub fn from_node(node: &Node, seq: u64, signer: &SecretKey) -> Result<Self, NodeError> {
+    pub fn from_node(node: &Node, seq: u64, signer: &SecretKey) -> Result<Self, String> {
         let mut record = NodeRecord {
             seq,
             ..Default::default()
@@ -361,13 +333,13 @@ impl NodeRecord {
         Ok(record)
     }
 
-    pub fn update_seq(&mut self, signer: &SecretKey) -> Result<(), NodeError> {
+    pub fn update_seq(&mut self, signer: &SecretKey) -> Result<(), String> {
         self.seq += 1;
         self.sign_record(signer)?;
         Ok(())
     }
 
-    pub fn set_fork_id(&mut self, fork_id: &ForkId, signer: &SecretKey) -> Result<(), NodeError> {
+    pub fn set_fork_id(&mut self, fork_id: &ForkId, signer: &SecretKey) -> Result<(), String> {
         if let Some((_, value)) = self.pairs.iter().find(|(k, _)| k == "eth") {
             if *fork_id == ForkId::decode(&value[1..]).expect("No fork Id in NodeRecord pairs") {
                 return Ok(());
@@ -384,10 +356,10 @@ impl NodeRecord {
         Ok(())
     }
 
-    fn sign_record(&mut self, signer: &SecretKey) -> Result<H512, NodeError> {
+    fn sign_record(&mut self, signer: &SecretKey) -> Result<H512, String> {
         let digest = &self.get_signature_digest();
         let msg = secp256k1::Message::from_digest_slice(digest)
-            .map_err(|_| NodeError::SignatureError("Invalid message digest".into()))?;
+            .map_err(|_| "Invalid message digest".to_string())?;
         let (_recovery_id, signature_bytes) = secp256k1::SECP256K1
             .sign_ecdsa_recoverable(&msg, signer)
             .serialize_compact();
@@ -498,104 +470,5 @@ impl RLPEncode for Node {
             .encode_field(&self.tcp_port)
             .encode_field(&self.public_key)
             .finish();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        types::{Node, NodeRecord},
-        utils::public_key_from_signing_key,
-    };
-    use ethrex_common::H512;
-    use ethrex_storage::{EngineType, Store};
-    use secp256k1::SecretKey;
-    use std::{net::SocketAddr, str::FromStr};
-
-    pub const TEST_GENESIS: &str = include_str!("../../../fixtures/genesis/l1.json");
-
-    #[test]
-    fn parse_node_from_enode_string() {
-        let input = "enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@18.138.108.67:30303";
-        let bootnode = Node::from_enode_url(input).unwrap();
-        let public_key = H512::from_str(
-            "d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666")
-            .unwrap();
-        let socket_address = SocketAddr::from_str("18.138.108.67:30303").unwrap();
-        let expected_bootnode = Node::new(
-            socket_address.ip(),
-            socket_address.port(),
-            socket_address.port(),
-            public_key,
-        );
-        assert_eq!(bootnode, expected_bootnode);
-    }
-
-    #[test]
-    fn parse_node_with_discport_from_enode_string() {
-        let input = "enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@18.138.108.67:30303?discport=30305";
-        let node = Node::from_enode_url(input).unwrap();
-        let public_key = H512::from_str(
-            "d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666")
-            .unwrap();
-        let socket_address = SocketAddr::from_str("18.138.108.67:30303").unwrap();
-        let expected_bootnode = Node::new(
-            socket_address.ip(),
-            30305,
-            socket_address.port(),
-            public_key,
-        );
-        assert_eq!(node, expected_bootnode);
-    }
-
-    #[test]
-    fn parse_node_from_enr_string() {
-        // https://github.com/ethereum/devp2p/blob/master/enr.md#test-vectors
-        let enr_string = "enr:-IS4QHCYrYZbAKWCBRlAy5zzaDZXJBGkcnh4MHcBFZntXNFrdvJjX04jRzjzCBOonrkTfj499SZuOh8R33Ls8RRcy5wBgmlkgnY0gmlwhH8AAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN1ZHCCdl8";
-        let node = Node::from_enr_url(enr_string).unwrap();
-        let public_key =
-            H512::from_str("0xca634cae0d49acb401d8a4c6b6fe8c55b70d115bf400769cc1400f3258cd31387574077f301b421bc84df7266c44e9e6d569fc56be00812904767bf5ccd1fc7f")
-                .unwrap();
-        let socket_address = SocketAddr::from_str("127.0.0.1:30303").unwrap();
-        let expected_node = Node::new(
-            socket_address.ip(),
-            socket_address.port(),
-            socket_address.port(),
-            public_key,
-        );
-        assert_eq!(node, expected_node);
-    }
-
-    #[tokio::test]
-    async fn encode_node_record_to_enr_url() {
-        // https://github.com/ethereum/devp2p/blob/master/enr.md#test-vectors
-        let signer = SecretKey::from_slice(&[
-            16, 125, 177, 238, 167, 212, 168, 215, 239, 165, 77, 224, 199, 143, 55, 205, 9, 194,
-            87, 139, 92, 46, 30, 191, 74, 37, 68, 242, 38, 225, 104, 246,
-        ])
-        .unwrap();
-        let addr = std::net::SocketAddr::from_str("127.0.0.1:30303").unwrap();
-
-        let storage =
-            Store::new("", EngineType::InMemory).expect("Failed to create in-memory storage");
-        storage
-            .add_initial_state(serde_json::from_str(TEST_GENESIS).unwrap())
-            .await
-            .expect("Failed to build test genesis");
-
-        let node = Node::new(
-            addr.ip(),
-            addr.port(),
-            addr.port(),
-            public_key_from_signing_key(&signer),
-        );
-        let mut record = NodeRecord::from_node(&node, 1, &signer).unwrap();
-        // Drop fork ID since the test doesn't use it
-        record.pairs.retain(|(k, _)| k != "eth");
-        record.sign_record(&signer).unwrap();
-
-        let expected_enr_string = "enr:-Iu4QIQVZPoFHwH3TCVkFKpW3hm28yj5HteKEO0QTVsavAGgD9ISdBmAgsIyUzdD9Yrqc84EhT067h1VA1E1HSLKcMgBgmlkgnY0gmlwhH8AAAGJc2VjcDI1NmsxoQJtSDUljLLg3EYuRCp8QJvH8G2F9rmUAQtPKlZjq_O7loN0Y3CCdl-DdWRwgnZf";
-
-        assert_eq!(record.enr_url().unwrap(), expected_enr_string);
     }
 }

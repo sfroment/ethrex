@@ -1,9 +1,6 @@
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use ethrex_blockchain::Blockchain;
@@ -39,7 +36,7 @@ impl SyncManager {
         cancel_token: CancellationToken,
         blockchain: Arc<Blockchain>,
         store: Store,
-        datadir: PathBuf,
+        datadir: String,
     ) -> Self {
         let snap_enabled = Arc::new(AtomicBool::new(matches!(sync_mode, SyncMode::Snap)));
         let syncer = Arc::new(Mutex::new(Syncer::new(

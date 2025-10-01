@@ -1,23 +1,22 @@
-use bytes::BufMut;
-use bytes::Bytes;
-use ethrex_blockchain::Blockchain;
-use ethrex_blockchain::error::MempoolError;
-use ethrex_common::types::BlobsBundle;
-use ethrex_common::types::Fork;
-use ethrex_common::types::P2PTransaction;
-use ethrex_common::{H256, types::Transaction};
+use bytes::{BufMut, Bytes};
+use ethrex_blockchain::{Blockchain, error::MempoolError};
+use ethrex_common::{
+    H256,
+    types::{BlobsBundle, Fork, P2PTransaction, Transaction},
+};
 use ethrex_rlp::{
     error::{RLPDecodeError, RLPEncodeError},
     structs::{Decoder, Encoder},
 };
 use ethrex_storage::error::StoreError;
 
-use crate::rlpx::utils::{log_peer_debug, log_peer_warn};
-use crate::rlpx::{
-    message::RLPxMessage,
-    utils::{snappy_compress, snappy_decompress},
+use crate::{
+    rlpx::{
+        message::RLPxMessage,
+        utils::{log_peer_warn, snappy_compress, snappy_decompress},
+    },
+    types::Node,
 };
-use crate::types::Node;
 
 // https://github.com/ethereum/devp2p/blob/master/caps/eth.md#transactions-0x02
 // Broadcast message
@@ -269,21 +268,9 @@ impl PooledTransactions {
     }
 
     /// Saves every incoming pooled transaction to the mempool.
-    pub async fn handle(
-        self,
-        node: &Node,
-        blockchain: &Blockchain,
-        is_l2_mode: bool,
-    ) -> Result<(), MempoolError> {
+    pub async fn handle(self, node: &Node, blockchain: &Blockchain) -> Result<(), MempoolError> {
         for tx in self.pooled_transactions {
             if let P2PTransaction::EIP4844TransactionWithBlobs(itx) = tx {
-                if is_l2_mode {
-                    log_peer_debug(
-                        node,
-                        "Rejecting blob transaction in L2 mode - blob transactions are not supported in L2",
-                    );
-                    continue;
-                }
                 if let Err(e) = blockchain
                     .add_blob_transaction_to_pool(itx.tx, itx.blobs_bundle)
                     .await

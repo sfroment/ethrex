@@ -2,56 +2,37 @@ use bytes::BufMut;
 use ethrex_rlp::error::{RLPDecodeError, RLPEncodeError};
 use std::fmt::Display;
 
-use crate::rlpx::snap::{
-    AccountRange, ByteCodes, GetAccountRange, GetByteCodes, GetStorageRanges, GetTrieNodes,
-    StorageRanges, TrieNodes,
+use crate::rlpx::{
+    mojave::messages::MojaveMessage,
+    snap::{
+        AccountRange, ByteCodes, GetAccountRange, GetByteCodes, GetStorageRanges, GetTrieNodes,
+        StorageRanges, TrieNodes,
+    },
 };
 
-use super::eth::blocks::{BlockBodies, BlockHeaders, GetBlockBodies, GetBlockHeaders};
-use super::eth::receipts::{GetReceipts, Receipts68, Receipts69};
-use super::eth::status::{StatusMessage68, StatusMessage69};
-use super::eth::transactions::{
-    GetPooledTransactions, NewPooledTransactionHashes, PooledTransactions, Transactions,
+use super::{
+    eth::{
+        blocks::{BlockBodies, BlockHeaders, GetBlockBodies, GetBlockHeaders},
+        receipts::{GetReceipts, Receipts},
+        status::StatusMessage,
+        transactions::{
+            GetPooledTransactions, NewPooledTransactionHashes, PooledTransactions, Transactions,
+        },
+        update::BlockRangeUpdate,
+    },
+    l2::{
+        self, messages,
+        messages::{BatchSealed, L2Message, NewBlock},
+    },
+    p2p::{DisconnectMessage, HelloMessage, PingMessage, PongMessage},
 };
-use super::eth::update::BlockRangeUpdate;
-use super::l2::messages::{BatchSealed, L2Message, NewBlock};
-use super::l2::{self, messages};
-use super::p2p::{DisconnectMessage, HelloMessage, PingMessage, PongMessage};
 
 use ethrex_rlp::encode::RLPEncode;
 
 const ETH_CAPABILITY_OFFSET: u8 = 0x10;
-const SNAP_CAPABILITY_OFFSET_ETH_68: u8 = 0x21;
-const SNAP_CAPABILITY_OFFSET_ETH_69: u8 = 0x22;
-const BASED_CAPABILITY_OFFSET_ETH_68: u8 = 0x30;
-const BASED_CAPABILITY_OFFSET_ETH_69: u8 = 0x31;
-
-#[derive(Debug, Clone, Copy, Default)]
-pub enum EthCapVersion {
-    #[default]
-    V68,
-    V69,
-}
-
-impl EthCapVersion {
-    pub const fn eth_capability_offset(&self) -> u8 {
-        ETH_CAPABILITY_OFFSET
-    }
-
-    pub const fn snap_capability_offset(&self) -> u8 {
-        match self {
-            EthCapVersion::V68 => SNAP_CAPABILITY_OFFSET_ETH_68,
-            EthCapVersion::V69 => SNAP_CAPABILITY_OFFSET_ETH_69,
-        }
-    }
-
-    pub const fn based_capability_offset(&self) -> u8 {
-        match self {
-            EthCapVersion::V68 => BASED_CAPABILITY_OFFSET_ETH_68,
-            EthCapVersion::V69 => BASED_CAPABILITY_OFFSET_ETH_69,
-        }
-    }
-}
+const SNAP_CAPABILITY_OFFSET: u8 = 0x21;
+const BASED_CAPABILITY_OFFSET: u8 = 0x30;
+const MOJAVE_CAPABILITY_OFFSET: u8 = 0x40;
 
 pub trait RLPxMessage: Sized {
     const CODE: u8;
@@ -66,8 +47,7 @@ pub enum Message {
     Disconnect(DisconnectMessage),
     Ping(PingMessage),
     Pong(PongMessage),
-    Status68(StatusMessage68),
-    Status69(StatusMessage69),
+    Status(StatusMessage),
     // eth capability
     // https://github.com/ethereum/devp2p/blob/master/caps/eth.md
     GetBlockHeaders(GetBlockHeaders),
@@ -79,8 +59,7 @@ pub enum Message {
     GetPooledTransactions(GetPooledTransactions),
     PooledTransactions(PooledTransactions),
     GetReceipts(GetReceipts),
-    Receipts68(Receipts68),
-    Receipts69(Receipts69),
+    Receipts(Receipts),
     BlockRangeUpdate(BlockRangeUpdate),
     // snap capability
     // https://github.com/ethereum/devp2p/blob/master/caps/snap.md
@@ -94,10 +73,12 @@ pub enum Message {
     TrieNodes(TrieNodes),
     // based capability
     L2(messages::L2Message),
+    // mojave capability
+    Mojave(MojaveMessage),
 }
 
 impl Message {
-    pub const fn code(&self, eth_version: EthCapVersion) -> u8 {
+    pub const fn code(&self) -> u8 {
         match self {
             Message::Hello(_) => HelloMessage::CODE,
             Message::Disconnect(_) => DisconnectMessage::CODE,
@@ -105,63 +86,47 @@ impl Message {
             Message::Pong(_) => PongMessage::CODE,
 
             // eth capability
-            Message::Status68(_) => eth_version.eth_capability_offset() + StatusMessage68::CODE,
-            Message::Status69(_) => eth_version.eth_capability_offset() + StatusMessage69::CODE,
-            Message::Transactions(_) => eth_version.eth_capability_offset() + Transactions::CODE,
-            Message::GetBlockHeaders(_) => {
-                eth_version.eth_capability_offset() + GetBlockHeaders::CODE
-            }
-            Message::BlockHeaders(_) => eth_version.eth_capability_offset() + BlockHeaders::CODE,
-            Message::GetBlockBodies(_) => {
-                eth_version.eth_capability_offset() + GetBlockBodies::CODE
-            }
-            Message::BlockBodies(_) => eth_version.eth_capability_offset() + BlockBodies::CODE,
+            Message::Status(_) => ETH_CAPABILITY_OFFSET + StatusMessage::CODE,
+            Message::Transactions(_) => ETH_CAPABILITY_OFFSET + Transactions::CODE,
+            Message::GetBlockHeaders(_) => ETH_CAPABILITY_OFFSET + GetBlockHeaders::CODE,
+            Message::BlockHeaders(_) => ETH_CAPABILITY_OFFSET + BlockHeaders::CODE,
+            Message::GetBlockBodies(_) => ETH_CAPABILITY_OFFSET + GetBlockBodies::CODE,
+            Message::BlockBodies(_) => ETH_CAPABILITY_OFFSET + BlockBodies::CODE,
             Message::NewPooledTransactionHashes(_) => {
-                eth_version.eth_capability_offset() + NewPooledTransactionHashes::CODE
+                ETH_CAPABILITY_OFFSET + NewPooledTransactionHashes::CODE
             }
             Message::GetPooledTransactions(_) => {
-                eth_version.eth_capability_offset() + GetPooledTransactions::CODE
+                ETH_CAPABILITY_OFFSET + GetPooledTransactions::CODE
             }
-            Message::PooledTransactions(_) => {
-                eth_version.eth_capability_offset() + PooledTransactions::CODE
-            }
-            Message::GetReceipts(_) => eth_version.eth_capability_offset() + GetReceipts::CODE,
-            Message::Receipts68(_) => eth_version.eth_capability_offset() + Receipts68::CODE,
-            Message::Receipts69(_) => eth_version.eth_capability_offset() + Receipts68::CODE,
-            Message::BlockRangeUpdate(_) => {
-                eth_version.eth_capability_offset() + BlockRangeUpdate::CODE
-            }
+            Message::PooledTransactions(_) => ETH_CAPABILITY_OFFSET + PooledTransactions::CODE,
+            Message::GetReceipts(_) => ETH_CAPABILITY_OFFSET + GetReceipts::CODE,
+            Message::Receipts(_) => ETH_CAPABILITY_OFFSET + Receipts::CODE,
+            Message::BlockRangeUpdate(_) => ETH_CAPABILITY_OFFSET + BlockRangeUpdate::CODE,
             // snap capability
-            Message::GetAccountRange(_) => {
-                eth_version.snap_capability_offset() + GetAccountRange::CODE
-            }
-            Message::AccountRange(_) => eth_version.snap_capability_offset() + AccountRange::CODE,
-            Message::GetStorageRanges(_) => {
-                eth_version.snap_capability_offset() + GetStorageRanges::CODE
-            }
-            Message::StorageRanges(_) => eth_version.snap_capability_offset() + StorageRanges::CODE,
-            Message::GetByteCodes(_) => eth_version.snap_capability_offset() + GetByteCodes::CODE,
-            Message::ByteCodes(_) => eth_version.snap_capability_offset() + ByteCodes::CODE,
-            Message::GetTrieNodes(_) => eth_version.snap_capability_offset() + GetTrieNodes::CODE,
-            Message::TrieNodes(_) => eth_version.snap_capability_offset() + TrieNodes::CODE,
+            Message::GetAccountRange(_) => SNAP_CAPABILITY_OFFSET + GetAccountRange::CODE,
+            Message::AccountRange(_) => SNAP_CAPABILITY_OFFSET + AccountRange::CODE,
+            Message::GetStorageRanges(_) => SNAP_CAPABILITY_OFFSET + GetStorageRanges::CODE,
+            Message::StorageRanges(_) => SNAP_CAPABILITY_OFFSET + StorageRanges::CODE,
+            Message::GetByteCodes(_) => SNAP_CAPABILITY_OFFSET + GetByteCodes::CODE,
+            Message::ByteCodes(_) => SNAP_CAPABILITY_OFFSET + ByteCodes::CODE,
+            Message::GetTrieNodes(_) => SNAP_CAPABILITY_OFFSET + GetTrieNodes::CODE,
+            Message::TrieNodes(_) => SNAP_CAPABILITY_OFFSET + TrieNodes::CODE,
 
             // based capability
             Message::L2(l2_msg) => {
-                eth_version.based_capability_offset() + {
+                BASED_CAPABILITY_OFFSET + {
                     match l2_msg {
                         L2Message::NewBlock(_) => NewBlock::CODE,
                         L2Message::BatchSealed(_) => BatchSealed::CODE,
                     }
                 }
             }
+
+            Message::Mojave(_) => MOJAVE_CAPABILITY_OFFSET + MojaveMessage::CODE,
         }
     }
-    pub fn decode(
-        msg_id: u8,
-        data: &[u8],
-        eth_version: EthCapVersion,
-    ) -> Result<Message, RLPDecodeError> {
-        if msg_id < eth_version.eth_capability_offset() {
+    pub fn decode(msg_id: u8, data: &[u8]) -> Result<Message, RLPDecodeError> {
+        if msg_id < ETH_CAPABILITY_OFFSET {
             match msg_id {
                 HelloMessage::CODE => Ok(Message::Hello(HelloMessage::decode(data)?)),
                 DisconnectMessage::CODE => {
@@ -171,15 +136,10 @@ impl Message {
                 PongMessage::CODE => Ok(Message::Pong(PongMessage::decode(data)?)),
                 _ => Err(RLPDecodeError::MalformedData),
             }
-        } else if msg_id < eth_version.snap_capability_offset() {
+        } else if msg_id < SNAP_CAPABILITY_OFFSET {
             // eth capability
-            match msg_id - eth_version.eth_capability_offset() {
-                StatusMessage68::CODE if matches!(eth_version, EthCapVersion::V68) => {
-                    Ok(Message::Status68(StatusMessage68::decode(data)?))
-                }
-                StatusMessage69::CODE if matches!(eth_version, EthCapVersion::V69) => {
-                    Ok(Message::Status69(StatusMessage69::decode(data)?))
-                }
+            match msg_id - ETH_CAPABILITY_OFFSET {
+                StatusMessage::CODE => Ok(Message::Status(StatusMessage::decode(data)?)),
                 Transactions::CODE => Ok(Message::Transactions(Transactions::decode(data)?)),
                 GetBlockHeaders::CODE => {
                     Ok(Message::GetBlockHeaders(GetBlockHeaders::decode(data)?))
@@ -197,20 +157,15 @@ impl Message {
                     PooledTransactions::decode(data)?,
                 )),
                 GetReceipts::CODE => Ok(Message::GetReceipts(GetReceipts::decode(data)?)),
-                Receipts68::CODE if matches!(eth_version, EthCapVersion::V68) => {
-                    Ok(Message::Receipts68(Receipts68::decode(data)?))
-                }
-                Receipts69::CODE if matches!(eth_version, EthCapVersion::V69) => {
-                    Ok(Message::Receipts69(Receipts69::decode(data)?))
-                }
+                Receipts::CODE => Ok(Message::Receipts(Receipts::decode(data)?)),
                 BlockRangeUpdate::CODE => {
                     Ok(Message::BlockRangeUpdate(BlockRangeUpdate::decode(data)?))
                 }
                 _ => Err(RLPDecodeError::MalformedData),
             }
-        } else if msg_id < eth_version.based_capability_offset() {
+        } else if msg_id < BASED_CAPABILITY_OFFSET {
             // snap capability
-            match msg_id - eth_version.snap_capability_offset() {
+            match msg_id - SNAP_CAPABILITY_OFFSET {
                 GetAccountRange::CODE => {
                     return Ok(Message::GetAccountRange(GetAccountRange::decode(data)?));
                 }
@@ -225,37 +180,36 @@ impl Message {
                 TrieNodes::CODE => Ok(Message::TrieNodes(TrieNodes::decode(data)?)),
                 _ => Err(RLPDecodeError::MalformedData),
             }
-        } else {
+        } else if msg_id < MOJAVE_CAPABILITY_OFFSET {
             // based capability
-            Ok(Message::L2(
-                match msg_id - eth_version.based_capability_offset() {
-                    messages::NewBlock::CODE => {
-                        let decoded = l2::messages::NewBlock::decode(data)?;
-                        L2Message::NewBlock(decoded)
-                    }
-                    BatchSealed::CODE => {
-                        let decoded = l2::messages::BatchSealed::decode(data)?;
-                        L2Message::BatchSealed(decoded)
-                    }
-                    _ => return Err(RLPDecodeError::MalformedData),
-                },
-            ))
+            Ok(Message::L2(match msg_id - BASED_CAPABILITY_OFFSET {
+                messages::NewBlock::CODE => {
+                    let decoded = l2::messages::NewBlock::decode(data)?;
+                    L2Message::NewBlock(decoded)
+                }
+                BatchSealed::CODE => {
+                    let decoded = l2::messages::BatchSealed::decode(data)?;
+                    L2Message::BatchSealed(decoded)
+                }
+                _ => return Err(RLPDecodeError::MalformedData),
+            }))
+        } else {
+            if msg_id == MOJAVE_CAPABILITY_OFFSET {
+                Ok(Message::Mojave(MojaveMessage::decode(data)?))
+            } else {
+                Err(RLPDecodeError::MalformedData)
+            }
         }
     }
 
-    pub fn encode(
-        &self,
-        buf: &mut dyn BufMut,
-        eth_version: EthCapVersion,
-    ) -> Result<(), RLPEncodeError> {
-        self.code(eth_version).encode(buf);
+    pub fn encode(&self, buf: &mut dyn BufMut) -> Result<(), RLPEncodeError> {
+        self.code().encode(buf);
         match self {
             Message::Hello(msg) => msg.encode(buf),
             Message::Disconnect(msg) => msg.encode(buf),
             Message::Ping(msg) => msg.encode(buf),
             Message::Pong(msg) => msg.encode(buf),
-            Message::Status68(msg) => msg.encode(buf),
-            Message::Status69(msg) => msg.encode(buf),
+            Message::Status(msg) => msg.encode(buf),
             Message::Transactions(msg) => msg.encode(buf),
             Message::GetBlockHeaders(msg) => msg.encode(buf),
             Message::BlockHeaders(msg) => msg.encode(buf),
@@ -265,8 +219,7 @@ impl Message {
             Message::GetPooledTransactions(msg) => msg.encode(buf),
             Message::PooledTransactions(msg) => msg.encode(buf),
             Message::GetReceipts(msg) => msg.encode(buf),
-            Message::Receipts68(msg) => msg.encode(buf),
-            Message::Receipts69(msg) => msg.encode(buf),
+            Message::Receipts(msg) => msg.encode(buf),
             Message::BlockRangeUpdate(msg) => msg.encode(buf),
             Message::GetAccountRange(msg) => msg.encode(buf),
             Message::AccountRange(msg) => msg.encode(buf),
@@ -280,6 +233,7 @@ impl Message {
                 L2Message::BatchSealed(msg) => msg.encode(buf),
                 L2Message::NewBlock(msg) => msg.encode(buf),
             },
+            Message::Mojave(msg) => msg.encode(buf),
         }
     }
 }
@@ -291,8 +245,7 @@ impl Display for Message {
             Message::Disconnect(_) => "p2p:Disconnect".fmt(f),
             Message::Ping(_) => "p2p:Ping".fmt(f),
             Message::Pong(_) => "p2p:Pong".fmt(f),
-            Message::Status68(_) => "eth:Status(68)".fmt(f),
-            Message::Status69(_) => "eth:Status(69)".fmt(f),
+            Message::Status(_) => "eth:Status".fmt(f),
             Message::GetBlockHeaders(_) => "eth:getBlockHeaders".fmt(f),
             Message::BlockHeaders(_) => "eth:BlockHeaders".fmt(f),
             Message::BlockBodies(_) => "eth:BlockBodies".fmt(f),
@@ -302,8 +255,7 @@ impl Display for Message {
             Message::Transactions(_) => "eth:TransactionsMessage".fmt(f),
             Message::GetBlockBodies(_) => "eth:GetBlockBodies".fmt(f),
             Message::GetReceipts(_) => "eth:GetReceipts".fmt(f),
-            Message::Receipts68(_) => "eth:Receipts(68)".fmt(f),
-            Message::Receipts69(_) => "eth:Receipts(69)".fmt(f),
+            Message::Receipts(_) => "eth:Receipts".fmt(f),
             Message::BlockRangeUpdate(_) => "eth:BlockRangeUpdate".fmt(f),
             Message::GetAccountRange(_) => "snap:GetAccountRange".fmt(f),
             Message::AccountRange(_) => "snap:AccountRange".fmt(f),
@@ -317,6 +269,7 @@ impl Display for Message {
                 L2Message::BatchSealed(_) => "based:BatchSealed".fmt(f),
                 L2Message::NewBlock(_) => "based:NewBlock".fmt(f),
             },
+            Message::Mojave(_) => "mojave:MojaveMessage".fmt(f),
         }
     }
 }
