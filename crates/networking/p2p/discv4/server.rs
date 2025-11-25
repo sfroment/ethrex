@@ -117,6 +117,7 @@ impl DiscoveryServer {
         let mut table = kademlia.table.lock().await;
 
         for bootnode in &bootnodes {
+            info!(adding = %format!("{:#x}", bootnode.public_key), "Adding bootnode");
             let _ = discovery_server.send_ping(bootnode).await.inspect_err(|e| {
                 error!(sent = "Ping", to = %format!("{:#x}", bootnode.public_key), err = ?e, "Error sending message to bootnode");
             });
@@ -142,10 +143,10 @@ impl DiscoveryServer {
         }
         match message {
             Message::Ping(ping_message) => {
-                trace!(received = "Ping", msg = ?ping_message, from = %format!("{sender_public_key:#x}"));
+                info!(received = "Ping", msg = ?ping_message, from = %format!("{sender_public_key:#x}"));
 
                 if is_msg_expired(ping_message.expiration) {
-                    trace!("Ping expired, skipped");
+                    info!("Ping expired, skipped");
                     return;
                 }
 
@@ -161,37 +162,37 @@ impl DiscoveryServer {
                 });
             }
             Message::Pong(pong_message) => {
-                trace!(received = "Pong", msg = ?pong_message, from = %format!("{:#x}", sender_public_key));
+                info!(received = "Pong", msg = ?pong_message, from = %format!("{:#x}", sender_public_key));
 
                 let node_id = node_id(&sender_public_key);
 
                 self.handle_pong(pong_message, node_id).await;
             }
             Message::FindNode(find_node_message) => {
-                trace!(received = "FindNode", msg = ?find_node_message, from = %format!("{:#x}", sender_public_key));
+                info!(received = "FindNode", msg = ?find_node_message, from = %format!("{:#x}", sender_public_key));
 
                 if is_msg_expired(find_node_message.expiration) {
-                    trace!("FindNode expired, skipped");
+                    info!("FindNode expired, skipped");
                     return;
                 }
 
                 self.handle_find_node(sender_public_key, from).await;
             }
             Message::Neighbors(neighbors_message) => {
-                trace!(received = "Neighbors", msg = ?neighbors_message, from = %format!("{sender_public_key:#x}"));
+                info!(received = "Neighbors", msg = ?neighbors_message, from = %format!("{sender_public_key:#x}"));
 
                 if is_msg_expired(neighbors_message.expiration) {
-                    trace!("Neighbors expired, skipping");
+                    info!("Neighbors expired, skipping");
                     return;
                 }
 
                 self.handle_neighbors(neighbors_message).await;
             }
             Message::ENRRequest(enrrequest_message) => {
-                trace!(received = "ENRRequest", msg = ?enrrequest_message, from = %format!("{sender_public_key:#x}"));
+                info!(received = "ENRRequest", msg = ?enrrequest_message, from = %format!("{sender_public_key:#x}"));
 
                 if is_msg_expired(enrrequest_message.expiration) {
-                    trace!("ENRRequest expired, skipping");
+                    info!("ENRRequest expired, skipping");
                     return;
                 }
 
@@ -207,7 +208,7 @@ impl DiscoveryServer {
                     - Check valid signature
                     - Take the `eth` part of the record. If it's None, this peer is garbage; if it's set
                 */
-                trace!(received = "ENRResponse", msg = ?enrresponse_message, from = %format!("{sender_public_key:#x}"));
+                info!(received = "ENRResponse", msg = ?enrresponse_message, from = %format!("{sender_public_key:#x}"));
             }
         }
     }
@@ -293,6 +294,7 @@ impl DiscoveryServer {
     }
 
     async fn send_ping(&self, node: &Node) -> Result<H256, DiscoveryServerError> {
+        info!(sending = "Ping", to = %format!("{:#x}", node.public_key));
         let mut buf = Vec::new();
         // TODO: Parametrize this expiration.
         let expiration: u64 = get_msg_expiration_from_seconds(EXPIRATION_SECONDS);
@@ -314,11 +316,12 @@ impl DiscoveryServer {
             .expect("first 32 bytes are the message hash");
         // We do not use self.send() here, as we already encoded the message to calculate hash.
         self.udp_socket.send_to(&buf, node.udp_addr()).await?;
-        debug!(sent = "Ping", to = %format!("{:#x}", node.public_key));
+        info!(sent = "Ping", to = %format!("{:#x}", node.public_key));
         Ok(H256::from(ping_hash))
     }
 
     async fn send_pong(&self, ping_hash: H256, node: &Node) -> Result<(), DiscoveryServerError> {
+        info!(sending = "Pong", to = %format!("{:#x}", node.public_key));
         // TODO: Parametrize this expiration.
         let expiration: u64 = get_msg_expiration_from_seconds(EXPIRATION_SECONDS);
 
@@ -334,12 +337,13 @@ impl DiscoveryServer {
 
         self.send(pong, node.udp_addr()).await?;
 
-        debug!(sent = "Pong", to = %format!("{:#x}", node.public_key));
+        info!(sent = "Pong", to = %format!("{:#x}", node.public_key));
 
         Ok(())
     }
 
     async fn send_find_node(&self, node: &Node) -> Result<(), DiscoveryServerError> {
+        info!(sending = "FindNode", to = %format!("{:#x}", node.public_key));
         let expiration: u64 = get_msg_expiration_from_seconds(EXPIRATION_SECONDS);
 
         let random_priv_key = SecretKey::new(&mut OsRng);
@@ -348,7 +352,7 @@ impl DiscoveryServer {
         let msg = Message::FindNode(FindNodeMessage::new(random_pub_key, expiration));
         self.send(msg, node.udp_addr()).await?;
 
-        debug!(sent = "FindNode", to = %format!("{:#x}", node.public_key));
+        info!(sent = "FindNode", to = %format!("{:#x}", node.public_key));
 
         Ok(())
     }
@@ -358,6 +362,7 @@ impl DiscoveryServer {
         neighbors: Vec<Node>,
         node: &Node,
     ) -> Result<(), DiscoveryServerError> {
+        info!(sending = "Neighbors", to = %format!("{:#x}", node.public_key));
         // TODO: Parametrize this expiration.
         let expiration: u64 = get_msg_expiration_from_seconds(EXPIRATION_SECONDS);
 
@@ -365,7 +370,7 @@ impl DiscoveryServer {
 
         self.send(msg, node.udp_addr()).await?;
 
-        debug!(sent = "Neighbors", to = %format!("{:#x}", node.public_key));
+        info!(sent = "Neighbors", to = %format!("{:#x}", node.public_key));
 
         Ok(())
     }
@@ -425,11 +430,11 @@ impl DiscoveryServer {
         let node_id = node_id(&sender_public_key);
 
         let Some(contact) = table.get(&node_id) else {
-            debug!(received = "FindNode", to = %format!("{sender_public_key:#x}"), "Unknown contact, skipping");
+            info!(received = "FindNode", to = %format!("{sender_public_key:#x}"), "Unknown contact, skipping");
             return;
         };
         if !contact.was_validated() {
-            debug!(received = "FindNode", to = %format!("{sender_public_key:#x}"), "Contact not validated, skipping");
+            info!(received = "FindNode", to = %format!("{sender_public_key:#x}"), "Contact not validated, skipping");
             return;
         }
         let node = contact.node.clone();
@@ -439,7 +444,7 @@ impl DiscoveryServer {
         // A malicious actor would send a findnode request with the IP address and UDP port of the target as the source address.
         // The recipient of the findnode packet would then send a neighbors packet (which is a much bigger packet than findnode) to the victim.
         if from.ip().to_canonical() != node.ip {
-            debug!(received = "FindNode", to = %format!("{sender_public_key:#x}"), "IP address mismatch, skipping");
+            info!(received = "FindNode", to = %format!("{sender_public_key:#x}"), "IP address mismatch, skipping");
             return;
         }
 
@@ -451,7 +456,7 @@ impl DiscoveryServer {
             tokio::task::spawn_blocking(move || get_closest_nodes(node_id, cloned_table))
                 .await
                 .inspect_err(|err| {
-                    debug!(
+                    info!(
                         received = "FindNode",
                         to = %format!("{sender_public_key:#x}"),
                         err = ?err,
@@ -493,11 +498,11 @@ impl DiscoveryServer {
         let mut table = self.kademlia.table.lock().await;
 
         let Some(contact) = table.get(&node_id) else {
-            debug!(received = "ENRRequest", to = %format!("{sender_public_key:#x}"), "Unknown contact, skipping");
+            info!(received = "ENRRequest", to = %format!("{sender_public_key:#x}"), "Unknown contact, skipping");
             return;
         };
         if !contact.was_validated() {
-            debug!(received = "ENRRequest", to = %format!("{sender_public_key:#x}"), "Contact not validated, skipping");
+            info!(received = "ENRRequest", to = %format!("{sender_public_key:#x}"), "Contact not validated, skipping");
             return;
         }
 
@@ -542,7 +547,7 @@ impl GenServer for DiscoveryServer {
                         Some(InMessage::Message(Box::new(Discv4Message::from(msg, addr))))
                     }
                     Err(e) => {
-                        debug!(error=?e, "Error receiving Discv4 message");
+                        info!(error=?e, "Error receiving Discv4 message");
                         // Skipping invalid data
                         None
                     }
