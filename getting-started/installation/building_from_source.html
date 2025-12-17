@@ -242,8 +242,9 @@
 <h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
 <ul>
 <li><a href="https://www.rust-lang.org/tools/install">Rust toolchain</a> (use <code>rustup</code> for easiest setup)</li>
+<li><a href="https://clang.llvm.org/docs/index.html">libclang</a> (for RocksDB)</li>
 <li><a href="https://git-scm.com/downloads">Git</a></li>
-<li><a href="https://docs.soliditylang.org/en/v0.8.30/installing-solidity.html">solc</a> (for L2 development)</li>
+<li><a href="https://docs.soliditylang.org/en/v0.8.29/installing-solidity.html">solc (v0.8.29)</a> (for L2 development)</li>
 </ul>
 <h3 id="l2-contracts"><a class="header" href="#l2-contracts">L2 contracts</a></h3>
 <p>If you want to install ethrex for L2 development, you may set the <code>COMPILE_CONTRACTS</code> env var, so the binary have the necessary contract code.</p>
@@ -286,12 +287,6 @@ cd ethrex
 <p><strong>(Optional) Move the binary to your <code>$PATH</code>:</strong></p>
 <pre><code class="language-sh">sudo mv ./target/release/ethrex /usr/local/bin/
 </code></pre>
-<hr />
-<p><strong>Next steps:</strong></p>
-<ul>
-<li><a href="../quickstart-l1.html">L1 Quickstart</a></li>
-<li><a href="../quickstart-l2.html">L2 Quickstart</a></li>
-</ul>
 
                     </main>
 
