@@ -5594,7 +5594,7 @@ rex l2 withdraw 111111111111111111 0x41443995d9eb6c6d6df51e55db2b188b12fe0f80d32
 	--bridge-owner 0x4417092b70a3e5f10dc504d0947dd256b965fc62 \
 	--deposit-rich \
 	--private-keys-file-path ../../fixtures/keys/private_keys_l1.txt \
-	--genesis-l1-path ../../fixtures/genesis/l1-dev.json \
+	--genesis-l1-path ../../fixtures/genesis/l1.json \
 	--genesis-l2-path ../../fixtures/genesis/l2_2.json \
     --randomize-contract-deployment \
     --router.address &lt;ROUTER_ADDRESS&gt;
@@ -9765,12 +9765,6 @@ To do this, they compute a merkle proof for the included batch and call the L1 <
 <ul>
 <li><strong><code>verifyBatch()</code></strong>: Verifies a single batch using RISC0, SP1, or TDX proofs</li>
 <li><strong><code>verifyBatchesAligned()</code></strong>: Verifies multiple batches in sequence using aligned proofs with Merkle verification</li>
-</ul>
-</li>
-<li>
-<p><strong>State Validation</strong></p>
-<ul>
-<li><strong><code>_verifyPublicData()</code></strong>: Internal function used during <code>verifyBatch()</code> or <code>verifyBatchesAligned()</code> that validates public proof inputs match previous data from <code>commitBatch()</code></li>
 </ul>
 </li>
 </ol>
@@ -14511,7 +14505,7 @@ Block building options:
       --builder.extra-data &lt;EXTRA_DATA&gt;
           Block extra data message.
 
-          [default: "ethrex 8.0.0"]
+          [default: "ethrex 9.0.0"]
 
       --builder.gas-limit &lt;GAS_LIMIT&gt;
           Target block gas limit.
@@ -14682,7 +14676,7 @@ Block building options:
       --builder.extra-data &lt;EXTRA_DATA&gt;
           Block extra data message.
 
-          [default: "ethrex 8.0.0"]
+          [default: "ethrex 9.0.0"]
 
       --builder.gas-limit &lt;GAS_LIMIT&gt;
           Target block gas limit.
